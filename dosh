@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+
+import os
+import shlex
+import subprocess
+
+# Пути к chroot-окружениям
+APT_CHROOT_PATH = "/opt/debian-root"
+PACMAN_CHROOT_PATH = "/opt/arch-root"
+APK_PATH = "/usr/bin/apk"  # APK доступен напрямую в основной системе
+
+# Словарь для путей к chroot-окружениям
+CHROOTS = {
+    "apt": APT_CHROOT_PATH,
+    "pacman": PACMAN_CHROOT_PATH,
+    "apk": None,  # APK запускается из основной системы
+}
+
+
+def which_command_in_env(command, env_name, env_path):
+    """
+    Проверяет, существует ли команда в указанной среде (основной или chroot).
+    """
+    try:
+        if env_path:  # chroot-окружение
+            result = subprocess.run(
+                ["chroot", env_path, "which", command],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        else:  # основная система
+            result = subprocess.run(
+                ["which", command],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        return result.stdout.strip() if result.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def find_command_locations(command):
+    """
+    Ищет команды в основной системе и chroot-окружениях.
+    Возвращает словарь с окружениями, где команда найдена.
+    """
+    locations = {}
+    for env_name, env_path in CHROOTS.items():
+        command_path = which_command_in_env(command, env_name, env_path)
+        if command_path:
+            locations[env_name] = command_path
+    return locations
+
+
+def execute_in_chroot(chroot_path, command):
+    """
+    Выполняет команду в chroot-окружении.
+    """
+    subprocess.run(["chroot", chroot_path] + command, check=True, text=True)
+
+
+def execute_command(command):
+    """
+    Выполняет системную команду.
+    Если команда найдена в нескольких окружениях, предлагает выбор.
+    """
+    try:
+        # Разбиваем команду на части
+        tokens = shlex.split(command)
+        cmd_name = tokens[0]
+        cmd_args = tokens[1:]
+
+        # Ищем, где доступна команда
+        locations = find_command_locations(cmd_name)
+
+        if not locations:
+            print(f"dsh: команда '{cmd_name}' не найдена.")
+            return
+
+        # Если команда найдена только в одном окружении, выполняем её
+        if len(locations) == 1:
+            env_name = next(iter(locations))
+            if env_name == "apk":
+                subprocess.run([cmd_name] + cmd_args)
+            else:
+                execute_in_chroot(CHROOTS[env_name], [cmd_name] + cmd_args)
+        else:
+            # Если команда найдена в нескольких окружениях, предлагаем выбор
+            print(f"Команда '{cmd_name}' найдена в нескольких окружениях:")
+            for i, (env_name, cmd_path) in enumerate(locations.items(), start=1):
+                print(f"{i}. {env_name} ({cmd_path})")
+
+            try:
+                choice = int(input("Выберите окружение (введите номер): ").strip())
+                env_name = list(locations.keys())[choice - 1]
+                if env_name == "apk":
+                    subprocess.run([cmd_name] + cmd_args)
+                else:
+                    execute_in_chroot(CHROOTS[env_name], [cmd_name] + cmd_args)
+            except (ValueError, IndexError):
+                print("dsh: неверный выбор.")
+    except FileNotFoundError:
+        print(f"dsh: команда не найдена: {command.split()[0]}")
+    except Exception as e:
+        print(f"dsh: ошибка выполнения команды: {e}")
+
+
+def change_directory(path):
+    """Смена текущей директории."""
+    try:
+        os.chdir(path)
+    except FileNotFoundError:
+        print(f"dsh: директория не найдена: {path}")
+    except Exception as e:
+        print(f"dsh: ошибка смены директории: {e}")
+
+
+def main():
+    """Главный цикл dsh."""
+    print("Добро пожаловать в Donut Shell (dsh). Введите 'exit' для выхода.")
+    while True:
+        try:
+            cwd = os.getcwd()
+            user_input = input(f"dsh:{cwd}$ ").strip()
+
+            if not user_input:
+                continue
+
+            if user_input == "exit":
+                print("Выход из Donut Shell.")
+                break
+            elif user_input.startswith("cd "):
+                change_directory(user_input.split(" ", 1)[1])
+            else:
+                execute_command(user_input)
+        except KeyboardInterrupt:
+            print("\nДля выхода введите 'exit'.")
+        except EOFError:
+            print("\nВыход из Donut Shell.")
+            break
+
+
+if __name__ == "__main__":
+    os.makedirs(APT_CHROOT_PATH, exist_ok=True)
+    os.makedirs(PACMAN_CHROOT_PATH, exist_ok=True)
+    main()
