@@ -38,16 +38,21 @@ def unbind_directory_from_chroot(chroot_path):
     subprocess.run(["umount", chroot_target], check=True)
 
 
-def execute_in_chroot(chroot_path, command, cwd):
+def execute_in_chroot(chroot_path, command, cwd, use_arch_chroot=False):
     """
-    Выполняет команду в chroot-окружении с привязкой оригинальной директории.
+    Выполняет команду в chroot-окружении. Использует arch-chroot, если задано.
     """
     try:
-        # Привязываем оригинальную директорию к chroot
+        # Привязываем текущую директорию к chroot
         bind_directory_to_chroot(chroot_path, cwd)
 
-        # Обновляем рабочую директорию внутри chroot и выполняем команду
-        chroot_command = ["chroot", chroot_path, "sh", "-c", f"cd {CHROOT_BIND_PATH} && " + " ".join(shlex.quote(arg) for arg in command)]
+        # Выбираем способ выполнения
+        if use_arch_chroot:
+            chroot_command = ["arch-chroot", chroot_path, "sh", "-c", f"cd {CHROOT_BIND_PATH} && " + " ".join(shlex.quote(arg) for arg in command)]
+        else:
+            chroot_command = ["chroot", chroot_path, "sh", "-c", f"cd {CHROOT_BIND_PATH} && " + " ".join(shlex.quote(arg) for arg in command)]
+
+        # Выполняем команду
         subprocess.run(chroot_command, check=True, text=True)
     finally:
         # Убираем привязку директории
@@ -93,12 +98,13 @@ def find_command_locations(command):
 
 def handle_pki(manager, args, cwd):
     """
-    Обрабатывает команды `pki` для работы с менеджерами пакетов.
+    Обрабатывает команды pki.
     """
     if manager == "apt":
         execute_in_chroot(APT_CHROOT_PATH, ["apt"] + args, cwd)
     elif manager == "pacman":
-        execute_in_chroot(PACMAN_CHROOT_PATH, ["pacman"] + args, cwd)
+        # Используем arch-chroot для pacman
+        execute_in_chroot(PACMAN_CHROOT_PATH, ["pacman"] + args, cwd, use_arch_chroot=True)
     elif manager == "apk":
         subprocess.run(["apk"] + args, check=True)
     else:
