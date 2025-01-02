@@ -9,6 +9,8 @@ APT_CHROOT_PATH = "/opt/debian-root"
 PACMAN_CHROOT_PATH = "/opt/arch-root"
 APK_PATH = "/usr/bin/apk"  # APK доступен напрямую в основной системе
 
+CHROOT_BIND_PATH = "/mnt/dsh_home"  # Место монтирования оригинальной директории в chroot
+
 # Словарь для путей к chroot-окружениям
 CHROOTS = {
     "apt": APT_CHROOT_PATH,
@@ -17,6 +19,39 @@ CHROOTS = {
 }
 
 SUPPORTED_MANAGERS = ["apt", "pacman", "apk"]
+
+
+def bind_directory_to_chroot(chroot_path, original_path):
+    """
+    Привязывает текущую директорию пользователя (original_path) к chroot-окружению.
+    """
+    chroot_target = os.path.join(chroot_path, CHROOT_BIND_PATH.lstrip("/"))
+    os.makedirs(chroot_target, exist_ok=True)
+    subprocess.run(["mount", "--bind", original_path, chroot_target], check=True)
+
+
+def unbind_directory_from_chroot(chroot_path):
+    """
+    Удаляет привязку текущей директории пользователя к chroot-окружению.
+    """
+    chroot_target = os.path.join(chroot_path, CHROOT_BIND_PATH.lstrip("/"))
+    subprocess.run(["umount", chroot_target], check=True)
+
+
+def execute_in_chroot(chroot_path, command, cwd):
+    """
+    Выполняет команду в chroot-окружении с привязкой оригинальной директории.
+    """
+    try:
+        # Привязываем оригинальную директорию к chroot
+        bind_directory_to_chroot(chroot_path, cwd)
+
+        # Обновляем рабочую директорию внутри chroot и выполняем команду
+        chroot_command = ["chroot", chroot_path, "sh", "-c", f"cd {CHROOT_BIND_PATH} && " + " ".join(shlex.quote(arg) for arg in command)]
+        subprocess.run(chroot_command, check=True, text=True)
+    finally:
+        # Убираем привязку директории
+        unbind_directory_from_chroot(chroot_path)
 
 
 def which_command_in_env(command, env_name, env_path):
@@ -56,21 +91,14 @@ def find_command_locations(command):
     return locations
 
 
-def execute_in_chroot(chroot_path, command):
-    """
-    Выполняет команду в chroot-окружении.
-    """
-    subprocess.run(["chroot", chroot_path] + command, check=True, text=True)
-
-
-def handle_pki(manager, args):
+def handle_pki(manager, args, cwd):
     """
     Обрабатывает команды `pki` для работы с менеджерами пакетов.
     """
     if manager == "apt":
-        execute_in_chroot(APT_CHROOT_PATH, ["apt"] + args)
+        execute_in_chroot(APT_CHROOT_PATH, ["apt"] + args, cwd)
     elif manager == "pacman":
-        execute_in_chroot(PACMAN_CHROOT_PATH, ["pacman"] + args)
+        execute_in_chroot(PACMAN_CHROOT_PATH, ["pacman"] + args, cwd)
     elif manager == "apk":
         subprocess.run(["apk"] + args, check=True)
     else:
@@ -91,13 +119,14 @@ def execute_command(command):
             manager = tokens[1]
             args = tokens[2:]
             if manager in SUPPORTED_MANAGERS:
-                handle_pki(manager, args)
+                handle_pki(manager, args, os.getcwd())
             else:
                 print(f"dsh: неизвестный менеджер пакетов: {manager}")
             return
 
         cmd_name = tokens[0]
         cmd_args = tokens[1:]
+        cwd = os.getcwd()
 
         # Ищем, где доступна команда
         locations = find_command_locations(cmd_name)
@@ -112,7 +141,7 @@ def execute_command(command):
             if env_name == "apk":
                 subprocess.run([cmd_name] + cmd_args)
             else:
-                execute_in_chroot(CHROOTS[env_name], [cmd_name] + cmd_args)
+                execute_in_chroot(CHROOTS[env_name], [cmd_name] + cmd_args, cwd)
         else:
             # Если команда найдена в нескольких окружениях, предлагаем выбор
             print(f"Команда '{cmd_name}' найдена в нескольких окружениях:")
@@ -125,7 +154,7 @@ def execute_command(command):
                 if env_name == "apk":
                     subprocess.run([cmd_name] + cmd_args)
                 else:
-                    execute_in_chroot(CHROOTS[env_name], [cmd_name] + cmd_args)
+                    execute_in_chroot(CHROOTS[env_name], [cmd_name] + cmd_args, cwd)
             except (ValueError, IndexError):
                 print("dsh: неверный выбор.")
     except FileNotFoundError:
@@ -146,7 +175,7 @@ def change_directory(path):
 
 def main():
     """Главный цикл dsh."""
-    print("Добро пожаловать в Donut Shell (dsh) с поддержкой pki и выбором окружений. Введите 'exit' для выхода.")
+    print("Добро пожаловать в Donut Shell (dsh). Введите 'exit' для выхода.")
     while True:
         try:
             cwd = os.getcwd()
