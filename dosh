@@ -16,6 +16,8 @@ CHROOTS = {
     "apk": None,  # APK запускается из основной системы
 }
 
+SUPPORTED_MANAGERS = ["apt", "pacman", "apk"]
+
 
 def which_command_in_env(command, env_name, env_path):
     """
@@ -61,6 +63,20 @@ def execute_in_chroot(chroot_path, command):
     subprocess.run(["chroot", chroot_path] + command, check=True, text=True)
 
 
+def handle_pki(manager, args):
+    """
+    Обрабатывает команды `pki` для работы с менеджерами пакетов.
+    """
+    if manager == "apt":
+        execute_in_chroot(APT_CHROOT_PATH, ["apt"] + args)
+    elif manager == "pacman":
+        execute_in_chroot(PACMAN_CHROOT_PATH, ["pacman"] + args)
+    elif manager == "apk":
+        subprocess.run(["apk"] + args, check=True)
+    else:
+        print(f"dsh: неизвестный менеджер пакетов '{manager}'")
+
+
 def execute_command(command):
     """
     Выполняет системную команду.
@@ -69,6 +85,17 @@ def execute_command(command):
     try:
         # Разбиваем команду на части
         tokens = shlex.split(command)
+
+        # Обрабатываем встроенную команду `pki`
+        if tokens[0] == "pki" and len(tokens) >= 2:
+            manager = tokens[1]
+            args = tokens[2:]
+            if manager in SUPPORTED_MANAGERS:
+                handle_pki(manager, args)
+            else:
+                print(f"dsh: неизвестный менеджер пакетов: {manager}")
+            return
+
         cmd_name = tokens[0]
         cmd_args = tokens[1:]
 
@@ -119,7 +146,7 @@ def change_directory(path):
 
 def main():
     """Главный цикл dsh."""
-    print("Добро пожаловать в Donut Shell (dsh). Введите 'exit' для выхода.")
+    print("Добро пожаловать в Donut Shell (dsh) с поддержкой pki и выбором окружений. Введите 'exit' для выхода.")
     while True:
         try:
             cwd = os.getcwd()
